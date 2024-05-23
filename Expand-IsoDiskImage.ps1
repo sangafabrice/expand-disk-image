@@ -23,6 +23,17 @@ Param (
 )
 # Convert the ISO file path to absolute path.
 $ImagePath = (Get-Item $ImagePath).FullName
+# The Temp folder must be NTS formated for mounting disk images.
+# This is a design decision since we can assign a drive letter to the internal volumes
+# of the disk image and use the roots of those volumes as temporary mount directories.
+# The goal of this design decision is to avoid visible changes of the system.
+If ((Get-Volume -DriveLetter (Get-Item $Env:TEMP).PSDrive.Name).FileSystem -ine 'NTFS') {
+  Throw 'Intermediate folder is not NTFS formatted.'
+}
+# Create an empty temporary directory where the mount point will reside.
+While (Test-Path ($TempMountDirPath = "$Env:Temp\MountDir-$(New-Guid)")) { }
+# The TEMP subdirectory is created here to check write right access.
+[void] (New-Item -Path $TempMountDirPath -ItemType Directory -ErrorAction Stop)
 # Modify the destination path if it carries info of a file.
 $SkipIndex = 0
 While (Test-Path $DestinationPath -PathType Leaf) {
@@ -30,13 +41,24 @@ While (Test-Path $DestinationPath -PathType Leaf) {
 }
 # Create the destination folder and convert its path to absolute.
 $DestinationPath = (New-Item $DestinationPath -ItemType Directory -Force -ErrorAction Stop).FullName
-# Mount the ISO disk image and copy the subsequent virtual drive root to the destination folder.
+# Mount the ISO disk image and store objects to variables.
+$DiskImageVolume = ($DiskImage = Mount-DiskImage $ImagePath -NoDriveLetter) | Get-Volume
+Try {
+  # Append to the temporary mount directory path the disk label segment.
+  $TempMountDirPath = (New-Item -Path "$TempMountDirPath\$($DiskImageVolume.FileSystemLabel)" -ItemType Directory -ErrorAction Stop).FullName
+}
+Catch { }
+# Mount the disk image volume in the temporary mount directory.
+mountvol.exe $TempMountDirPath $($DiskImageVolume.Path)
+# Copy the temporary mount directory to the destination folder.
 # The CopyHere() method of the Windows Shell COM API is responsible for checking the 
 # available space in the destination folder, handling file overwrites, and displaying a progress bar.
 (New-Object -ComObject Shell.Application).
 NameSpace($DestinationPath).
-CopyHere("$((($DiskImage = Mount-DiskImage $ImagePath) | Get-Volume).DriveLetter):\")
+CopyHere($TempMountDirPath)
+# Clean up disk and volume settings.
 [void] ($DiskImage | Dismount-DiskImage)
+mountvol.exe /r
 # Open the destination folder if required.
 If ($Open) {
   explorer.exe $DestinationPath
