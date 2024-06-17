@@ -1,3 +1,7 @@
+using namespace System.Windows.Forms
+using namespace System.Drawing
+using assembly System.Windows.Forms
+using assembly System.Drawing
 <#
 .SYNOPSIS
 Expand an ISO file.
@@ -39,11 +43,183 @@ While (Test-Path ($TempMountDirPath = "$Env:Temp\MountDir-$(New-Guid)")) { }
 # The TEMP subdirectory is created here to check write right access.
 [void] (New-Item -Path $TempMountDirPath -ItemType Directory -ErrorAction Stop)
 }
+# Initialize Error Message variables.
+$ErrorMessage = ''
+$DefaultErrorMessageText = 'The destination folder path string is not valid.'
+# Specifies that a non-critical destination path error occured and was handled.
+$HandledDestinationPathError = $(
+  If ('DestinationPath' -inotin $PSBoundParameters.Keys) {
+    $True
+  } Else {
+    $False
+  }
+)
+# Unify the destination path string.
+Function UnifyValidDestinationPath {
+  If (-not (Split-Path $Args[0] -IsAbsolute)) {
+    If (
+      $Args[0] -match '(?<ShareRoot>\\\\[^\\]+\\[^\\]+)(\\|$)' -and
+      (Test-Path $Matches.ShareRoot)
+    ) {
+      Return "\$($Args[0] -replace '\\+','\')"
+    }
+    Return Join-Path $PWD.ProviderPath ($Args[0] -replace '\\+','\')
+  }
+  Return $Args[0] -replace '\\+','\'
+}
+Function UnifyBeforeValidationDestinationPath {
+  Return $Args[0].TrimEnd() -replace '/','\'
+}
+Try {
+  $DestinationPath = UnifyBeforeValidationDestinationPath $DestinationPath
+}
+Catch {
+  Throw $_
+}
+If (Test-Path $DestinationPath -IsValid) {
+  $DestinationPath = UnifyValidDestinationPath $DestinationPath
+} Else {
+  $ErrorMessage = $DefaultErrorMessageText
+  $HandledDestinationPathError = $True
+}
 # Modify the destination path if it carries info of a file.
 $SkipIndex = 0
 While (Test-Path $DestinationPath -PathType Leaf) {
   $DestinationPath = "$DestinationPath ($((++$SkipIndex)))"
+  $HandledDestinationPathError = $True
 }
+# The Expand Disk Image form.
+$ExpandDiskImageDialog = [Form]::New() | ForEach-Object {
+  $_.Size = '500, 365'
+  $_.Text = 'Extract ISO Disk Image'
+  $_.Icon = "$PSScriptRoot\logo.ico"
+  $_.BackColor = 'White'
+  $_.Font = 'Segoe UI,10'
+  $_.StartPosition = 'CenterScreen'
+  $_.MinimumSize = $_.Size
+  $_.MaximumSize = $_.Size
+  $_.MaximizeBox = $False
+  Return $_
+}
+$SelectDestinationFolderDialog = [FolderBrowserDialog]::New() | ForEach-Object {
+  $_.Description  = 'Select a Folder'
+  $_.ShowNewFolderButton = $True
+  If (-not $DestinationPath.StartsWith('\\')) {
+    $_.SelectedPath = $DestinationPath
+  }
+  Return $_
+}
+$ExpandDiskImageDialog.Controls.AddRange(@(
+  [Label]::New() | ForEach-Object {
+    $_.AutoSize = $True
+    $_.Text = 'Select a Destination and Extract Files'
+    $_.Font = 'Segoe UI,11'
+    $_.ForeColor = 'DarkBlue'
+    $_.Location = '20, 20'
+    Return $_
+  }
+  ($DestinationFolderPathTextBox = [TextBox]::New() | ForEach-Object {
+    $_.Width = 340
+    $_.BorderStyle = 'FixedSingle'
+    $_.Location = '22, 80'
+    $_.Text = $DestinationPath
+    Return $_
+  })
+  [Label]::New() | ForEach-Object {
+    $_.AutoSize = $True
+    $_.Text = 'Files will be extracted to this folder:'
+    $_.Font = 'Segoe UI,9'
+    $_.Location = '20, 60'
+    Return $_
+  }
+  [Button]::New() | ForEach-Object {
+    $_.Width = 90
+    $_.Height += 2
+    $_.Text = 'Browse...'
+    $_.FlatStyle = 'Flat'
+    $_.Location = '372, 80'
+    $_.BackColor = '#F0F0F0'
+    $_.add_Paint({
+      Param($EvtSrc, $Evt)
+      [ControlPaint]::DrawBorder($Evt.Graphics, $EvtSrc.DisplayRectangle, 'Gray', 'Solid')
+    })
+    $_.add_Click({
+      If ($SelectDestinationFolderDialog.ShowDialog() -ieq 'OK') {
+        $DestinationFolderPathTextBox.Text = $SelectDestinationFolderDialog.SelectedPath
+      }
+    })
+    Return $_
+  }
+  ($OpenDestinationFolderCheckBox = [CheckBox]::New() | ForEach-Object {
+    $_.AutoSize = $True
+    $_.FlatStyle = 'Flat'
+    $_.Location = '22, 120'
+    $_.Text = 'Show extracted files when complete'
+    $_.Font = 'Segoe UI,9'
+    $_.Checked = $Open
+    Return $_
+  })
+  [Button]::New() | ForEach-Object {
+    $_.Width = 90
+    $_.Text = 'Extract'
+    $_.FlatStyle = 'Flat'
+    $_.Location = '372, 288'
+    $_.BackColor = '#F0F0F0'
+    $_.add_Paint({
+      Param($EvtSrc, $Evt)
+      [ControlPaint]::DrawBorder($Evt.Graphics, $EvtSrc.DisplayRectangle, 'Gray', 'Solid')
+    })
+    $ExpandDiskImageDialog.AcceptButton = $_
+    $_.DialogResult = 'None'
+    $_.add_Click({
+      If ($This.DialogResult -ieq 'Yes') {
+        Return
+      }
+      $DestinationFolderPathTextBox.Text = UnifyBeforeValidationDestinationPath $DestinationFolderPathTextBox.Text
+      If (
+        [string]::IsNullOrWhiteSpace($DestinationFolderPathTextBox.Text) -or
+        -not (Test-Path $DestinationFolderPathTextBox.Text -IsValid)
+      ) {
+        $ErrorMessageLabel.Text = $DefaultErrorMessageText
+        Return
+      }
+      If (Test-Path $DestinationFolderPathTextBox.Text -PathType Leaf) {
+        $ErrorMessageLabel.Text = 'The selected path is an existing file.'
+        Return
+      }
+      $DestinationFolderPathTextBox.Text = UnifyValidDestinationPath $DestinationFolderPathTextBox.Text
+      $ErrorMessageLabel.Text = ''
+      $This.DialogResult = 'Yes'
+      $This.PerformClick()
+    })
+    Return $_
+  }
+  ($ErrorMessageLabel = [Label]::New() | ForEach-Object {
+    $_.Width = 400
+    $_.Font = 'Segoe UI,7'
+    $_.ForeColor = 'Red'
+    $_.TextAlign = 'TopLeft'
+    $_.BackColor = '#F0F0F0'
+    $_.Location = '20, 290'
+    $_.Text = $ErrorMessage
+    Return $_
+  })
+  [Label]::New() | ForEach-Object {
+    $_.Size = '500,55'
+    $_.BackColor = '#F0F0F0'
+    $_.Location = '0, 272'
+    Return $_
+  }
+))
+$DestinationFolderPathTextBox.add_TextChanged({
+  $ErrorMessageLabel.Text = ''
+})
+If (
+  $HandledDestinationPathError -and
+  $ExpandDiskImageDialog.ShowDialog() -ieq 'Cancel'
+) { Return }
+# Set the DestinationPath to the destination folder text box text.
+$DestinationPath = $DestinationFolderPathTextBox.Text
 # Create the destination folder and convert its path to absolute.
 $DestinationPath = (New-Item $DestinationPath -ItemType Directory -Force -ErrorAction Stop).FullName
 # Mount the ISO disk image and store objects to variables.
@@ -71,6 +247,6 @@ If ($HideDrive) {
 mountvol.exe /r
 }
 # Open the destination folder if required.
-If ($Open) {
+If ($OpenDestinationFolderCheckBox.Checked) {
   explorer.exe $DestinationPath
 }
