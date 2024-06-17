@@ -39,7 +39,7 @@ If ((Get-Volume -DriveLetter (Get-Item $Env:TEMP).PSDrive.Name).FileSystem -ine 
   Throw 'Intermediate folder is not NTFS formatted.'
 }
 # Create an empty temporary directory where the mount point will reside.
-While (Test-Path ($TempMountDirPath = "$Env:Temp\MountDir-$(New-Guid)")) { }
+While (Test-Path ($TempMountDirPath = "$Env:Temp\MountDir-$([Guid]::NewGuid())")) { }
 # The TEMP subdirectory is created here to check write right access.
 [void] (New-Item -Path $TempMountDirPath -ItemType Directory -ErrorAction Stop)
 }
